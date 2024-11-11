@@ -1,0 +1,110 @@
+之前的日志：
+	1.在修改代码的过程中有d2d逐个像素绘制的方式，因为有了更好的方式，已经不用
+    for (int y = 1; y < height - 1; y++)
+    {
+        for (int x = 1; x < width - 1; x++)
+        {
+            int lineIndex = y * width + x;
+            // 根据波幅计算位图数据偏移值，渲染点（x，y)对应原始图片（iPosX，iPosY）
+            //int iPosX = x + (wave1[lineIndex - 1] - wave1[lineIndex + 1]);
+            //int iPosY = y + (wave1[lineIndex - width] - wave1[lineIndex + width]);
+
+            //另外一种计算偏移的方法(轻）
+            int waveData = (1024 - wave1[lineIndex]);
+            int iPosX = (x - width / 2) * waveData / 1024 + width / 2;
+            int iPosY = (y - height / 2) * waveData / 1024 + height / 2;
+
+            if (0 <= iPosX && iPosX < width &&
+                0 <= iPosY && iPosY < height)
+            {
+                m_pD2DDeviceContext->DrawBitmap(m_pBitmap[87],
+                    D2D1::RectF(x, y, x + 1, y + 1),
+                    1.0f,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    D2D1::RectF(iPosX, iPosY, iPosX + 1, iPosY + 1));
+            }
+        }
+    }
+
+	1.2.有gdi+获取像素设置像素的方式，效率也低，也不再用
+void WaterWaveEffect::WaveRender(Graphics* graphics, Bitmap* originalBitmap) {
+    Bitmap* newBitmap = new Bitmap(PIC_WIDTH, PIC_HEIGHT);
+    Graphics newGraphics(newBitmap);
+
+    for (int y = 0; y < PIC_HEIGHT; y++) {
+        for (int x = 0; x < PIC_WIDTH; x++) {
+            int waveData = (1024 - wave1[y][x]);
+            int iPosX = (x - PIC_WIDTH / 2) * waveData / 1024 + PIC_WIDTH / 2;
+            int iPosY = (y - PIC_HEIGHT / 2) * waveData / 1024 + PIC_HEIGHT / 2;
+
+            if (0 <= iPosX && iPosX < PIC_WIDTH && 0 <= iPosY && iPosY < PIC_HEIGHT) {
+                Color color;
+                originalBitmap->GetPixel(iPosX, iPosY, &color);
+                newBitmap->SetPixel(x, y, color);
+            }
+        }
+    }
+    graphics->DrawImage(newBitmap, 0, 0);
+
+    delete newBitmap;
+}
+
+	1.3.当时我用的是在一个函数里从资源文件加载d2d位图，当时想的是修改wic位图的内存指针，来实现水波纹，只是效果不如意，当时对代码的了解很浅，所以放弃了，兜兜转转最后用的还是这种方法
+
+	2.把水波纹类的当前水波振幅数据（wave）改为使用二维数组，使左右两边也有了边界
+	3.加入检测是否有全屏窗口，
+	4.从使用DXGI表面改为使用Composition表面，本来是希望在渲染函数里可以重复创建释放绘制设备，但是后来需要在计时器里使用render渲染函数，所以更改了代码，绘制设备只需创建一次，并且删除了缩放窗口消息里的重新创建交换链，有好有坏，好的是缩放因为不再需要创建交换链画面更流畅，坏处需要更改函数让表面与窗口关联，否则不能缩放画面，导致放大画面之后感觉不如之前美观，
+	5.在4里说渲染函数在计时器里使用，原因是当时水波纹效率太低，用计时器控制频率，现在已经删除
+	6.之前有很多文件，分成了很多类，我都删了，合到了app文件里
+	7.写了一个timer类，用来计时，主要是文字的显示用来控制根据时间渐隐，后来改成了std的方式
+	8.
+
+
+3.6:
+	把释放内存放到了一起
+4.0：
+	1.使用了gdi+加载图像，修改内存指针，实现水波纹效果，再转为d2d格式由d2d绘制，里面有两个render函数，一个是DWORD类型，一个是BYTE类型，都可用，我用了DWORD类型，在转d2d格式的时候遇见了半透明图像绘制出来会发亮的情况，添加了代码，原理是从原始像素值分离透明度和红绿蓝通道的值，将每个颜色通道的值乘以透明度值，并除以255，最后将调整后的颜色通道和原始透明度重新组合成新的像素值，并储存在newdata中。
+	2.改变了线程函数，使用std：：stread
+	3.把帧率计算由d2d2timer头文件计算换成函数里另一种方式计算
+
+4.1：
+	1.改动非常大，
+	  不再使用gdi+图像，改为加载WIC位图，单独写了一个函数加载WIC位图，在类的渲染函数里获取WIC位图的像素数据指针，其他和gdi+类一样，修改内存指针，转为d2d格式，
+我还在gdi+类里把渲染函数分成了四个，一个是原始指针和修改指针都为BYTE的通过gdi+绘制的函数，作为资料， 其他三个，一是数据类型都是DWORD，二是数据类型都是BYTE，三是原始指针是BYTE修改指针是DWORD，，在d2dwate类里用的就是原始指针是BYTE修改指针是DWORD，因为WIC位图获取的就是BYTE，，但是在使用第一种偏移方式时遇见了画面只显示右下四分之一的画面，后来小小的修改了偏移方式得到了解决。
+
+4.2：	
+	1.本来wate类里加载图像返回的是IWICBitmapSource，在render函数里由IWICBitmapSource转为IWICBitmap，IWICBitmap锁定后获取内存指针，现在改成了直接加载IWICBitmap
+
+4.3：	2024.9.27
+	1.屏蔽d2dwate类，使用gdi+类，我发现使用d2d2类会多20兆的内存，使用gdi+类一共才15兆
+	2。在wave里使用了缓存池
+	3.波幅数据wave1的上限计算:(N * stoneWeight) * 2^K
+N为石头次数，K为最大更新操作
+Kmax约等于根号下1920的平方加1080的平方
+k最大约为2203
+	4.更改了频率计算逻辑
+	5.更改了窗口限制代码
+4.4
+	1.尝试了显示除png32的图片，wic转的图片只能显示png32，不知道该怎么适配了，gid+转的图片可以显示，只要在格式里换一下就行了，
+	2.发现个大bug，缓存池没有写释放代码，重新加入了，
+	3.把缓存池类型都从DWORD改为了BYTE，
+	4.把waved2d类的render函数改为都是BYTE的类型
+	5.在wave的render函数加入了如果超过缓存池就创建缓存区，
+	6.把App类的创建工厂函数放入构造函数里，这样waved2d的构造函数里就能使用wic工厂，就可以在这里放创建wic位图的函数，不用再在创建窗口的时候写了
+	7.把鼠标是否在窗口内的函数屏蔽了
+4.5
+	1.在wave类把缓存池数量改为87
+	2.把waved2d类的两个加载wic位图函数的返回类型从IWICBitmap改为HRESULT
+	3.把app类的LoadResourceD2dcolorBitmap函数返回类型从ID2D1Bitmap也改为HRESULT
+	4.1.waved2d类因为没有把位图转为32位，所以无法显示24位图，在waved2d类的加载位图函数中添加了把图像转为32位的代码，使waved2d类也可以显示24图
+	4.2.同时添加了缩放位图大小的代码，直接根据常量调整大小
+	4.3.因为添加了把图像改为32位，所以不用添加根据透明度更改颜色值的代码
+	5.在app类的LoadResourceD2dcolorBitmap函数，之前因为添加转wic位图更改颜色通道时没有修改缩放位图函数的参数，现在重新修改了，使其能先转wic，再缩放，再转32，其他函数都是先转32再缩放，说是先缩放画质更好，没怎么发现
+	6.在wavegdiplus类的render函数的LockBits函数的第三个参数进行了更改，让其不用在写代码根据透明度调整颜色值，我依然在render3函数里把根据透明度调整颜色值的代码保留了下来
+4.6
+	1.把交换链的CreateSwapChainForHwnd函数换成CreateSwapChainForComposition，目的就是我喜欢这样的显示风格，但是这样交换链就不能适应窗口尺寸了，也就是说缩放窗口时图像不能适应窗口了，所以我在size消息里使用ResizeBuffers函数调整交换链尺寸，但是这样一来在render函数里原来设置的rect尺寸就不适用了，也修改了一下。但是原来的窗口缩放图像都会在窗口中央我很喜欢，要使用原来的尺寸逻辑就需要释放图像根据窗口重新创建，这样我觉得麻烦。
+	2.上一个出现了bug，显示标题栏之后会有框，在扩展样式里还是加回WS_EX_NOREDIRECTIONBITMAP
+	3.还是改成使用之前的计算fps的函数
+	4.把全局变量都挪到了app类里
+4.7	
+	1.增加了记录窗口位置的功能
